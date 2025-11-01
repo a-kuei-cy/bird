@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>憤怒的小鳥簡易版</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+  
+  <!-- 配置Tailwind -->
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bird: '#FF6B6B',
+            pig: '#4ECDC4',
+            wood: '#D9A566',
+            stone: '#7393B3',
+            ground: '#77DD77',
+            sky: '#A7C7E7'
+          },
+          fontFamily: {
+            game: ['"Comic Sans MS"', '"Marker Felt"', 'sans-serif']
+          }
+        }
+      }
+    }
+  </script>
+  
+  <style type="text/tailwindcss">
+    @layer utilities {
+      .game-shadow {
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+      }
+      .bird-shadow {
+        filter: drop-shadow(0 4px 3px rgb(0 0 0 / 0.3));
+      }
+      .trajectory {
+        stroke-dasharray: 5,5;
+        stroke: rgba(255,255,255,0.5);
+        stroke-width: 2;
+        fill: none;
+      }
+    }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center justify-center font-game overflow-hidden">
+  <!-- 遊戲容器 -->
+  <div class="relative w-full max-w-4xl h-[70vh] bg-sky overflow-hidden rounded-lg game-shadow">
+    <!-- 分數顯示 -->
+    <div class="absolute top-4 left-4 bg-white/80 px-4 py-2 rounded-full text-xl font-bold text-gray-800 z-10">
+      <i class="fa fa-star text-yellow-500 mr-2"></i>分數: <span id="score">0</span>
+    </div>
+    
+    <!-- 剩餘小鳥 -->
+    <div class="absolute top-4 right-4 bg-white/80 px-4 py-2 rounded-full text-xl font-bold text-gray-800 z-10">
+      <i class="fa fa-dove text-bird mr-2"></i>剩餘: <span id="birds-left">3</span>
+    </div>
+    
+    <!-- 遊戲畫布 -->
+    <canvas id="gameCanvas" class="w-full h-full"></canvas>
+    
+    <!-- 遊戲開始界面 -->
+    <div id="startScreen" class="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-20">
+      <h1 class="text-[clamp(2rem,5vw,4rem)] font-bold text-white mb-8">憤怒的小鳥</h1>
+      <p class="text-white text-xl mb-10 text-center px-4">拉動小鳥調整角度和力度，鬆開後射擊綠色小豬！</p>
+      <button id="startButton" class="bg-bird hover:bg-red-500 text-white font-bold py-3 px-10 rounded-full text-xl transition-all transform hover:scale-105 focus:outline-none">
+        開始遊戲
+      </button>
+    </div>
+    
+    <!-- 遊戲結束界面 -->
+    <div id="gameOverScreen" class="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-20 hidden">
+      <h1 class="text-[clamp(2rem,5vw,4rem)] font-bold text-white mb-4">遊戲結束</h1>
+      <p class="text-white text-2xl mb-4">最終分數: <span id="finalScore">0</span></p>
+      <button id="restartButton" class="bg-bird hover:bg-red-500 text-white font-bold py-3 px-10 rounded-full text-xl transition-all transform hover:scale-105 focus:outline-none">
+        再來一次
+      </button>
+    </div>
+  </div>
+  
+  <!-- 遊戲說明 -->
+  <div class="mt-6 text-gray-700 max-w-2xl text-center">
+    <p><i class="fa fa-mouse-pointer mr-2"></i>按住小鳥並拖動來調整發射角度和力度</p>
+    <p class="mt-2"><i class="fa fa-hand-paper-o mr-2"></i>鬆開滑鼠發射小鳥</p>
+    <p class="mt-2"><i class="fa fa-target mr-2"></i>擊中綠色小豬得分，消滅所有小豬通關</p>
+  </div>
+
+  <script>
+    // 等待DOM加載完成
+    document.addEventListener('DOMContentLoaded', function() {
+      // 獲取畫布和上下文
+      const canvas = document.getElementById('gameCanvas');
+      const ctx = canvas.getContext('2d');
+      
+      // 設置畫布尺寸
+      function resizeCanvas() {
+        const container = canvas.parentElement;
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+      }
+      
+      // 初始化時調整一次尺寸，並監聽窗口大小變化
+      resizeCanvas();
+      window.addEventListener('resize', resizeCanvas);
+      
+      // 遊戲狀態
+      const gameState = {
+        started: false,
+        score: 0,
+        birdsLeft: 3,
+        level: 1,
+        isDragging: false,
+        dragStart: { x: 0, y: 0 },
+        currentMouse: { x: 0, y: 0 },
+        birds: [],
+        pigs: [],
+        blocks: [],
+        trajectoryPoints: []
+      };
+      
+      // 物理常量
+      const physics = {
+        gravity: 0.5,
+        restitution: 0.3, // 彈性係數
+        airResistance: 0.99 // 空氣阻力
+      };
+      
+      // 遊戲對象類
+      class GameObject {
+        constructor(x, y, width, height, type) {
+          this.x = x;
+          this.y = y;
+          this.width = width;
+          this.height = height;
+          this.velocityX = 0;
+          this.velocityY = 0;
+          this.type = type;
+          this.mass = 1;
+          this.isDestroyed = false;
+          
+          // 根據類型設置不同屬性
+          switch(type) {
+            case 'bird':
+              this.radius = width / 2;
+              this.color = '#FF6B6B';
+              this.mass = 1.5;
+              break;
+            case 'pig':
+              this.radius = width / 2;
+              this.color = '#4ECDC4';
+              this.mass = 1;
+              break;
+            case 'wood':
+              this.color = '#D9A566';
+              this.mass = 2;
+              break;
+            case 'stone':
+              this.color = '#7393B3';
+              this.mass = 5;
+              break;
+          }
+        }
+        
+        // 繪製對象
+        draw() {
+          if (this.isDestroyed) return;
+          
+          ctx.save();
+          ctx.beginPath();
+          
+          if (this.type === 'bird' || this.type === 'pig') {
+            // 圓形對象（小鳥和豬）
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = this.color;
+            ctx.fill();
+            
+            // 繪製眼睛
+            ctx.beginPath();
+            ctx.arc(
+              this.x + (this.velocityX > 0 ? -this.radius/3 : this.radius/3), 
+              this.y - this.radius/4, 
+              this.radius/5, 0, Math.PI * 2
+            );
+            ctx.fillStyle = 'white';
+            ctx.fill();
+            
+            // 眼珠
+            ctx.beginPath();
+            ctx.arc(
+              this.x + (this.velocityX > 0 ? -this.radius/3 - this.radius/15 : this.radius/3 + this.radius/15), 
+              this.y - this.radius/4, 
+              this.radius/10, 0, Math.PI * 2
+            );
+            ctx.fillStyle = 'black';
+            ctx.fill();
+            
+            if (this.type === 'bird') {
+              // 小鳥的嘴
+              ctx.beginPath();
+              ctx.moveTo(this.x + this.radius, this.y);
+              ctx.lineTo(this.x + this.radius * 1.5, this.y - this.radius/4);
+              ctx.lineTo(this.x + this.radius * 1.5, this.y + this.radius/4);
+              ctx.closePath();
+              ctx.fillStyle = '#FFD166';
+              ctx.fill();
+            } else if (this.type === 'pig') {
+              // 豬的鼻子
+              ctx.beginPath();
+              ctx.arc(this.x + this.radius/2, this.y, this.radius/4, 0, Math.PI * 2);
+              ctx.fillStyle = '#38A3A5';
+              ctx.fill();
+            }
+          } else {
+            // 矩形對象（木塊和石塊）
+            ctx.rect(this.x - this.width/2, this.y - this.height/2, this.width, this.height);
+            ctx.fillStyle = this.color;
+            ctx.fill();
+            
+            // 添加紋理
+            if (this.type === 'wood') {
+              ctx.strokeStyle = '#A67C52';
+              ctx.lineWidth = 2;
+              ctx.stroke();
+              
+              // 木紋
+              ctx.beginPath();
+              for (let i = 0; i < 5; i++) {
+                const y = this.y - this.height/2 + (i + 0.5) * (this.height / 5);
+                ctx.moveTo(this.x - this.width/2 + 5, y);
+                ctx.lineTo(this.x + this.width/2 - 5, y);
+              }
+              ctx.strokeStyle = 'rgba(166, 124, 82, 0.3)';
+              ctx.lineWidth = 1;
+              ctx.stroke();
+            }
+          }
+          
+          ctx.restore();
+        }
+        
+        // 更新對象狀態
+        update() {
+          if (this.isDestroyed) return;
+          
+          // 如果正在拖拽，則不應用物理
+          if (gameState.isDragging && this.type === 'bird') return;
+          
+          // 應用重力
+          this.velocityY += physics.gravity;
+          
+          // 應用空氣阻力
+          this.velocityX *= physics.airResistance;
+          this.velocityY *= physics.airResistance;
+          
+          // 更新位置
+          this.x += this.velocityX;
+          this.y += this.velocityY;
+          
+          // 邊界檢測
+          const groundY = canvas.height - 50;
+          
+          // 地面碰撞
+          if (this.y + this.radius > groundY && this.type !== 'block') {
+            this.y = groundY - this.radius;
+            this.velocityY = -this.velocityY * physics.restitution;
+            
+            // 如果速度很小，停止移動
+            if (Math.abs(this.velocityY) < 0.5) {
+              this.velocityY = 0;
+            }
+            
+            // 水平方向的摩擦
+            this.velocityX *= 0.95;
+          }
+          
+          // 左右邊界碰撞
+          if (this.x - this.radius < 0) {
+            this.x = this.radius;
+            this.velocityX = -this.velocityX * physics.restitution;
+          } else if (this.x + this.radius > canvas.width) {
+            this.x = canvas.width - this.radius;
+            this.velocityX = -this.velocityX * physics.restitution;
+          }
+          
+          // 上邊界碰撞
+          if (this.y - this.radius < 0) {
+            this.y = this.radius;
+            this.velocityY = -this.velocityY * physics.restitution;
+          }
+        }
+        
+        // 檢測與其他對象的碰撞
+        checkCollision(other) {
+          if (this.isDestroyed || other.isDestroyed) return false;
+          
+          // 計算碰撞距離
+          let dx = this.x - other.x;
+          let dy = this.y - other.y;
+          let distance = Math.sqrt(dx * dx + dy * dy);
+          
+          // 圓形碰撞檢測
+          if ((this.type === 'bird' || this.type === 'pig') && 
+              (other.type === 'bird' || other.type === 'pig')) {
+            return distance < this.radius + other.radius;
+          }
+          
+          // 圓形與矩形碰撞檢測
+          if ((this.type === 'bird' || this.type === 'pig') && 
+              (other.type === 'wood' || other.type === 'stone')) {
+            // 找到矩形上離圓心最近的點
+            let closestX = Math.max(other.x - other.width/2, Math.min(this.x, other.x + other.width/2));
+            let closestY = Math.max(other.y - other.height/2, Math.min(this.y, other.y + other.height/2));
+            
+            // 計算最近點與圓心的距離
+            dx = this.x - closestX;
+            dy = this.y - closestY;
+            
+            return dx * dx + dy * dy < this.radius * this.radius;
+          }
+          
+          // 矩形與矩形碰撞檢測
+          if ((this.type === 'wood' || this.type === 'stone') && 
+              (other.type === 'wood' || other.type === 'stone')) {
+            return (
+              this.x - this.width/2 < other.x + other.width/2 &&
+              this.x + this.width/2 > other.x - other.width/2 &&
+              this.y - this.height/2 < other.y + other.height/2 &&
+              this.y + this.height/2 > other.y - other.height/2
+            );
+          }
+          
+          // 矩形與圓形碰撞檢測
+          if ((this.type === 'wood' || this.type === 'stone') && 
+              (other.type === 'bird' || other.type === 'pig')) {
+            return other.checkCollision(this);
+          }
+          
+          return false;
+        }
+        
+        // 處理碰撞響應
+        resolveCollision(other) {
+          if (this.isDestroyed || other.isDestroyed) return;
+          
+          // 計算碰撞法線
+          let dx = other.x - this.x;
+          let dy = other.y - this.y;
+          let distance = Math.sqrt(dx * dx + dy * dy);
+          
+          // 防止除以零
+          if (distance === 0) {
+            dx = 1;
+            dy = 0;
+            distance = 1;
+          }
+          
+          // 標準化法線
+          const nx = dx / distance;
+          const ny = dy / distance;
+          
+          // 計算相對速度
+          const rvx = other.velocityX - this.velocityX;
+          const rvy = other.velocityY - this.velocityY;
+          
+          // 計算相對速度在法線上的投影
+          const velocityAlongNormal = rvx * nx + rvy * ny;
+          
+          // 如果物體正在分離，不需要處理碰撞
+          if (velocityAlongNormal > 0) return;
+          
+          // 計算碰撞衝量
+          const e = physics.restitution; // 恢復係數
+          const j = -(1 + e) * velocityAlongNormal;
+          const jDiv = 1 / this.mass + 1 / other.mass;
+          const impulse = j / jDiv;
+          
+          // 應用衝量
+          this.velocityX -= (impulse / this.mass) * nx;
+          this.velocityY -= (impulse / this.mass) * ny;
+          other.velocityX += (impulse / other.mass) * nx;
+          other.velocityY += (impulse / other.mass) * ny;
+          
+          // 特殊處理：小鳥擊中豬或木塊
+          if (this.type === 'bird' && (other.type === 'pig' || other.type === 'wood' || other.type === 'stone')) {
+            // 足夠的衝擊力才能摧毀物體
+            const impactForce = Math.sqrt(this.velocityX**2 + this.velocityY** 2);
+            
+            if (other.type === 'pig' && impactForce > 3) {
+              other.isDestroyed = true;
+              gameState.score += 100;
+              updateScore();
+            }
+            
+            // 木塊比石塊更容易被摧毀
+            if ((other.type === 'wood' && impactForce > 5) || 
+                (other.type === 'stone' && impactForce > 10)) {
+              other.isDestroyed = true;
+              gameState.score += 50;
+              updateScore();
+            }
+          }
+          
+          // 特殊處理：豬或木塊擊中小鳥
+          if (other.type === 'bird' && (this.type === 'pig' || this.type === 'wood' || this.type === 'stone')) {
+            const impactForce = Math.sqrt(other.velocityX**2 + other.velocityY** 2);
+            if (impactForce > 5) {
+              other.isDestroyed = true;
+            }
+          }
+        }
+      }
+      
+      // 創建新的小鳥
+      function createBird() {
+        const bird = new GameObject(100, canvas.height - 100, 30, 30, 'bird');
+        gameState.birds.push(bird);
+        return bird;
+      }
+      
+      // 初始化關卡
+      function initLevel(level) {
+        gameState.pigs = [];
+        gameState.blocks = [];
+        
+        const groundY = canvas.height - 50;
+        
+        // 根據關卡創建不同的場景
+        if (level === 1) {
+          // 第一關：簡單場景
+          gameState.pigs.push(new GameObject(canvas.width - 200, groundY - 30, 30, 30, 'pig'));
+          
+          // 添加一些木塊
+          gameState.blocks.push(new GameObject(canvas.width - 250, groundY - 40, 80, 20, 'wood'));
+          gameState.blocks.push(new GameObject(canvas.width - 250, groundY - 60, 20, 40, 'wood'));
+        } else if (level === 2) {
+          // 第二關：中等難度
+          gameState.pigs.push(new GameObject(canvas.width - 300, groundY - 30, 30, 30, 'pig'));
+          gameState.pigs.push(new GameObject(canvas.width - 200, groundY - 30, 30, 30, 'pig'));
+          
+          // 添加木塊和石塊
+          gameState.blocks.push(new GameObject(canvas.width - 300, groundY - 40, 80, 20, 'wood'));
+          gameState.blocks.push(new GameObject(canvas.width - 250, groundY - 80, 20, 80, 'wood'));
+          gameState.blocks.push(new GameObject(canvas.width - 200, groundY - 40, 80, 20, 'stone'));
+        } else {
+          // 第三關：高難度
+          gameState.pigs.push(new GameObject(canvas.width - 400, groundY - 30, 30, 30, 'pig'));
+          gameState.pigs.push(new GameObject(canvas.width - 300, groundY - 30, 30, 30, 'pig'));
+          gameState.pigs.push(new GameObject(canvas.width - 200, groundY - 30, 30, 30, 'pig'));
+          
+          // 添加更多障礙物
+          gameState.blocks.push(new GameObject(canvas.width - 350, groundY - 40, 100, 20, 'wood'));
+          gameState.blocks.push(new GameObject(canvas.width - 300, groundY - 80, 20, 80, 'wood'));
+          gameState.blocks.push(new GameObject(canvas.width - 300, groundY - 120, 100, 20, 'stone'));
+          gameState.blocks.push(new GameObject(canvas.width - 200, groundY - 60, 20, 60, 'stone'));
+        }
+        
+        // 創建新小鳥
+        gameState.birds = [];
+        createBird();
+      }
+      
+      // 更新分數顯示
+      function updateScore() {
+        document.getElementById('score').textContent = gameState.score;
+        document.getElementById('birds-left').textContent = gameState.birdsLeft;
+        document.getElementById('finalScore').textContent = gameState.score;
+      }
+      
+      // 檢查遊戲是否結束
+      function checkGameState() {
+        // 檢查是否所有豬都被消滅
+        const remainingPigs = gameState.pigs.filter(pig => !pig.isDestroyed);
+        if (remainingPigs.length === 0) {
+          // 進入下一關
+          gameState.level++;
+          if (gameState.level > 3) {
+            // 所有關卡完成
+            endGame(true);
+          } else {
+            // 重置小鳥數量
+            gameState.birdsLeft = 3;
+            updateScore();
+            initLevel(gameState.level);
+          }
+          return;
+        }
+        
+        // 檢查是否還有小鳥
+        const activeBirds = gameState.birds.filter(bird => !bird.isDestroyed && 
+          (Math.abs(bird.velocityX) > 0.1 || Math.abs(bird.velocityY) > 0.1));
+        
+        if (activeBirds.length === 0) {
+          gameState.birdsLeft--;
+          updateScore();
+          
+          if (gameState.birdsLeft <= 0) {
+            // 遊戲結束
+            endGame(false);
+          } else {
+            // 創建新小鳥
+            createBird();
+          }
+        }
+      }
+      
+      // 結束遊戲
+      function endGame(isWin) {
+        gameState.started = false;
+        document.getElementById('gameOverScreen').classList.remove('hidden');
+        
+        // 如果勝利，顯示額外信息
+        const finalScoreEl = document.getElementById('finalScore');
+        if (isWin) {
+          finalScoreEl.textContent = `${gameState.score} - 恭喜你通關所有關卡！`;
+        } else {
+          finalScoreEl.textContent = `${gameState.score} - 再接再厲！`;
+        }
+      }
+      
+      // 繪製軌跡預測
+      function drawTrajectory() {
+        if (!gameState.isDragging || gameState.birds.length === 0) return;
+        
+        const bird = gameState.birds[gameState.birds.length - 1];
+        if (bird.isDestroyed) return;
+        
+        // 計算發射速度（基於拖拽距離）
+        const dx = gameState.dragStart.x - bird.x;
+        const dy = gameState.dragStart.y - bird.y;
+        const powerX = dx * 0.2;
+        const powerY = dy * 0.2;
+        
+        // 預測軌跡點
+        gameState.trajectoryPoints = [];
+        let x = bird.x;
+        let y = bird.y;
+        let vx = powerX;
+        let vy = powerY;
+        const groundY = canvas.height - 50;
+        
+        for (let i = 0; i < 50; i++) {
+          vy += physics.gravity;
+          vx *= physics.airResistance;
+          vy *= physics.airResistance;
+          
+          x += vx;
+          y += vy;
+          
+          // 地面碰撞模擬
+          if (y + bird.radius > groundY) {
+            y = groundY - bird.radius;
+            vy = -vy * physics.restitution;
+          }
+          
+          // 邊界檢查
+          if (x < 0 || x > canvas.width || y > canvas.height) break;
+          
+          gameState.trajectoryPoints.push({x, y});
+        }
+        
+        // 繪製軌跡
+        if (gameState.trajectoryPoints.length > 1) {
+          ctx.beginPath();
+          ctx.moveTo(gameState.dragStart.x, gameState.dragStart.y);
+          
+          gameState.trajectoryPoints.forEach(point => {
+            ctx.lineTo(point.x, point.y);
+          });
+          
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+          ctx.setLineDash([5, 5]);
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+      
+      // 繪製遊戲場景
+      function draw() {
+        // 清空畫布
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 繪製天空背景
+        const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        gradient.addColorStop(0, '#A7C7E7');
+        gradient.addColorStop(1, '#7FB3D5');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // 繪製地面
+        const groundY = canvas.height - 50;
+        ctx.fillStyle = '#77DD77';
+        ctx.fillRect(0, groundY, canvas.width, 50);
